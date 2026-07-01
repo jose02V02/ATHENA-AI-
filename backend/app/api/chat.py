@@ -146,7 +146,7 @@ async def stream_chat(
     db.commit()
 
     # 2. Forziamo il modello cloud gratuito di Groq anziché Ollama locale
-    model_to_use = "llama3-8b-8192"
+    model_to_use = "llama-3.1-8b-instant"
 
     # 3. Retrieve historical messages for context
     history = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at.asc()).all()
