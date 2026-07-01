@@ -62,7 +62,7 @@ interface ToolExecution {
   collapsed?: boolean;
 }
 
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const COMMON_MODELS = [
   { id: "qwen2.5:7b", name: "Qwen 2.5 (7B) - Consigliato" },
