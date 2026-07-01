@@ -11,3 +11,4 @@ python-multipart==0.0.9
 pypdf2==3.0.1
 python-dotenv
 qdrant-client
+pypdf
