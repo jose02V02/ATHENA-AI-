@@ -2,6 +2,7 @@ import json
 import uuid
 import httpx
 import asyncio
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -13,7 +14,14 @@ from app.core.tools import TOOLS_DEFINITION, execute_tool
 from pydantic import BaseModel
 from typing import List, Optional
 
+# Importiamo l'SDK ufficiale di Groq
+from groq import Groq
+
 router = APIRouter()
+
+# Inizializziamo il client Groq leggendo la chiave dalle variabili d'ambiente di Render
+# Se non trova la chiave, userà una stringa vuota temporanea per evitare crash all'avvio
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 # Pydantic Schemas
 class ConversationCreate(BaseModel):
@@ -137,8 +145,8 @@ async def stream_chat(
 
     db.commit()
 
-    # 2. Get active model
-    model_to_use = chat_input.model or settings.DEFAULT_MODEL
+    # 2. Forziamo il modello cloud gratuito di Groq anziché Ollama locale
+    model_to_use = "llama3-8b-8192"
 
     # 3. Retrieve historical messages for context
     history = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at.asc()).all()
@@ -167,18 +175,13 @@ async def stream_chat(
         except Exception as e:
             print(f"Errore RAG Qdrant: {e}")
 
-    # Build messages payload for Ollama
+    # Build messages payload for Groq
     system_prompt = get_system_prompt(conversation.personality)
     formatted_messages = [{"role": "system", "content": system_prompt}]
     
-    # Format history (excluding current user message to append it with context)
+    # Format history
     for msg in history[:-1]:
         m_dict = {"role": msg.role, "content": msg.content}
-        if msg.images:
-            try:
-                m_dict["images"] = json.loads(msg.images)
-            except:
-                pass
         formatted_messages.append(m_dict)
 
     # Append current message with RAG context if found
@@ -186,96 +189,115 @@ async def stream_chat(
     if rag_context:
         current_content = (
             f"Usa le seguenti fonti estratte dai documenti per rispondere alla domanda dell'utente.\n"
-            f"Cita sempre il nome del file della fonte ([NomeFile.pdf]) se utilizzi le sue informazioni.\n"
+            f"Cita sempre il nome del file della fonte ([NomeFile.pdf]) se utilizzi le sei informazioni.\n"
             f"Se le informazioni nel contesto non sono sufficienti per rispondere, rispondi al meglio delle tue conoscenze ma menziona che i documenti non contengono la risposta.\n\n"
             f"CONTESTO DOCUMENTALE:\n{rag_context}\n\n"
             f"DOMANDA DELL'UTENTE: {user_msg_content}"
         )
     
     current_msg_dict = {"role": "user", "content": current_content}
-    if chat_input.images:
-        current_msg_dict["images"] = chat_input.images
-        
     formatted_messages.append(current_msg_dict)
 
-    # 5. SSE generator with Agent loop
+    # 5. SSE generator con chiamata Cloud a Groq
     async def event_generator():
         accumulated_content = ""
         loop_count = 0
         max_loops = 3
         
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                while loop_count < max_loops:
-                    # Request to Ollama
-                    payload = {
-                        "model": model_to_use,
-                        "messages": formatted_messages,
-                        "stream": False  # Non-streaming to easily handle tool calls in Python
-                    }
-                    
-                    # Add tools only if no images are present (multimodal models in Ollama often don't support tools simultaneously)
-                    if not chat_input.images:
-                        payload["tools"] = TOOLS_DEFINITION
-
-                    response = await client.post(
-                        f"{settings.OLLAMA_URL}/api/chat",
-                        json=payload
-                    )
-                    
-                    if response.status_code != 200:
-                        yield f"data: {json.dumps({'error': f'Ollama ha restituito errore {response.status_code}: {response.text}'})}\n\n"
-                        return
-                    
-                    res_data = response.json()
-                    msg_res = res_data.get("message", {})
-                    tool_calls = msg_res.get("tool_calls", [])
-                    
-                    if tool_calls:
-                        # Append the assistant's tool-call response to formatted_messages
-                        formatted_messages.append(msg_res)
-                        
-                        for tool_call in tool_calls:
-                            func = tool_call.get("function", {})
-                            t_name = func.get("name")
-                            t_args = func.get("arguments", {})
-                            
-                            # SSE Event: Tool Call Started
-                            yield f"data: {json.dumps({'tool': t_name, 'args': t_args})}\n\n"
-                            
-                            # Execute the tool
-                            loop = asyncio.get_event_loop()
-                            tool_result = await loop.run_in_executor(None, execute_tool, t_name, t_args)
-                            
-                            # SSE Event: Tool Result
-                            yield f"data: {json.dumps({'tool_result': tool_result})}\n\n"
-                            
-                            # Append tool response
-                            formatted_messages.append({
-                                "role": "tool",
-                                "content": tool_result
-                            })
-                        
-                        loop_count += 1
-                    else:
-                        # No tool calls, this is our final text!
-                        final_content = msg_res.get("content", "")
-                        accumulated_content = final_content
-                        
-                        # Stream the final content to the frontend to simulate streaming response
-                        chunk_size = 12
-                        for i in range(0, len(final_content), chunk_size):
-                            chunk = final_content[i:i+chunk_size]
-                            yield f"data: {json.dumps({'content': chunk})}\n\n"
-                            await asyncio.sleep(0.01)  # Smooth streaming animation delay
-                        break
+            # Eseguiamo la chiamata a Groq in modo asincrono per non bloccare FastAPI
+            loop = asyncio.get_event_loop()
+            
+            while loop_count < max_loops:
+                # Setup dei parametri per l'API di Groq
+                kwargs = {
+                    "model": model_to_use,
+                    "messages": formatted_messages,
+                }
                 
-                # Save assistant response to DB
-                if accumulated_content.strip():
-                    save_message_sync(conversation_id, "assistant", accumulated_content)
-                yield f"data: {json.dumps({'status': 'done'})}\n\n"
+                # Se non ci sono immagini, convertiamo le definizioni dei tuoi strumenti per Groq
+                if not chat_input.images and TOOLS_DEFINITION:
+                    groq_tools = []
+                    for t in TOOLS_DEFINITION:
+                        if "function" in t:
+                            groq_tools.append({
+                                "type": "function",
+                                "function": t["function"]
+                            })
+                    if groq_tools:
+                        kwargs["tools"] = groq_tools
+
+                # Chiamata a Groq eseguita nell'executor per renderla non-blocking
+                response = await loop.run_in_executor(
+                    None, 
+                    lambda: groq_client.chat.completions.create(**kwargs)
+                )
+                
+                msg_res = response.choices[0].message
+                tool_calls = getattr(msg_res, "tool_calls", None)
+                
+                if tool_calls:
+                    # Registriamo la risposta con la richiesta del tool
+                    formatted_messages.append({
+                        "role": "assistant",
+                        "content": msg_res.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            } for tc in tool_calls
+                        ]
+                    })
+                    
+                    for tool_call in tool_calls:
+                        t_name = tool_call.function.name
+                        # Risoluzione argomenti stringificati
+                        try:
+                            t_args = json.loads(tool_call.function.arguments)
+                        except:
+                            t_args = tool_call.function.arguments
+                        
+                        # SSE Event: Tool Call Started
+                        yield f"data: {json.dumps({'tool': t_name, 'args': t_args})}\n\n"
+                        
+                        # Esecuzione del tool sincrono
+                        tool_result = await loop.run_in_executor(None, execute_tool, t_name, t_args)
+                        
+                        # SSE Event: Tool Result
+                        yield f"data: {json.dumps({'tool_result': tool_result})}\n\n"
+                        
+                        # Append tool response richiesto dalle specifiche Groq/OpenAI
+                        formatted_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": t_name,
+                            "content": str(tool_result)
+                        })
+                    
+                    loop_count += 1
+                else:
+                    # Nessun tool, testo finale!
+                    final_content = msg_res.content or ""
+                    accumulated_content = final_content
+                    
+                    # Genera l'effetto streaming sul client
+                    chunk_size = 12
+                    for i in range(0, len(final_content), chunk_size):
+                        chunk = final_content[i:i+chunk_size]
+                        yield f"data: {json.dumps({'content': chunk})}\n\n"
+                        await asyncio.sleep(0.01)
+                    break
+            
+            # Salva la risposta dell'assistente nel DB
+            if accumulated_content.strip():
+                save_message_sync(conversation_id, "assistant", accumulated_content)
+            yield f"data: {json.dumps({'status': 'done'})}\n\n"
                 
         except Exception as e:
-            yield f"data: {json.dumps({'error': f'Errore di connessione o esecuzione: {str(e)}'})}\n\n"
+            yield f"data: {json.dumps({'error': f'Errore Cloud Groq o esecuzione: {str(e)}'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
