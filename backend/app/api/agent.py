@@ -83,3 +83,29 @@ from langchain.agents import initialize_agent
 tools = [write_to_file] # <--- Il tool deve essere qui!
 
 agent = initialize_agent(tools, llm, agent="zero-shot-react-description", verbose=True)
+from app.services.file_manager import write_to_file
+from langchain.agents import initialize_agent, Tool
+
+# Definiamo esplicitamente il tool
+tools = [
+    Tool(
+        name="write_to_file",
+        func=write_to_file,
+        description="Usa questo strumento per scrivere e salvare file su Supabase."
+    )
+]
+
+# Inizializzazione agente con i tool
+agent = initialize_agent(tools, llm, agent="zero-shot-react-description", verbose=True)
+from langchain.tools import Tool
+from app.services.file_manager import write_to_file
+
+# Definisci il tool in modo che l'IA sappia ESATTAMENTE quando usarlo
+athena_storage_tool = Tool(
+    name="write_to_file",
+    func=write_to_file,
+    description="USA SEMPRE QUESTO TOOL per salvare qualsiasi file o documento. NON usare python_interpreter per salvare file. Questo tool salva i file in modo persistente su Supabase Storage."
+)
+
+# Aggiungi questo tool alla tua lista di strumenti
+tools = [athena_storage_tool]
