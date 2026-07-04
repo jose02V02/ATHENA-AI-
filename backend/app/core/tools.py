@@ -3,6 +3,7 @@ import io
 import math
 import json
 from duckduckgo_search import DDGS
+from app.core.file_manager import write_to_file
 
 def web_search(query: str) -> str:
     """Ricerca sul web tramite DuckDuckGo e restituisce i risultati più pertinenti."""
@@ -20,7 +21,6 @@ def web_search(query: str) -> str:
 
 def python_interpreter(code: str) -> str:
     """Esegue codice Python locale in sicurezza e restituisce l'output standard (stdout/stderr)."""
-    # Safeguard: prevent imports of dangerous modules
     for bad in ["os", "subprocess", "shutil", "socket", "requests", "urllib"]:
         if f"import {bad}" in code or f"from {bad}" in code:
             return f"Errore: L'importazione del modulo '{bad}' è bloccata per ragioni di sicurezza."
@@ -31,29 +31,28 @@ def python_interpreter(code: str) -> str:
     redirected_error = io.StringIO()
     sys.stdout = redirected_output
     sys.stderr = redirected_error
-    
-    # Restricted namespace
+
     glob = {
         "__builtins__": __builtins__,
         "math": math,
         "json": json,
     }
     loc = {}
-    
+
     try:
         exec(code, glob, loc)
         sys.stdout = old_stdout
         sys.stderr = old_stderr
-        
+
         stdout_val = redirected_output.getvalue()
         stderr_val = redirected_error.getvalue()
-        
+
         res = ""
         if stdout_val:
             res += stdout_val
         if stderr_val:
             res += f"\nErrori:\n{stderr_val}"
-            
+
         if not res.strip():
             res = "Codice eseguito con successo (nessun output stampato)."
         return res
@@ -62,7 +61,7 @@ def python_interpreter(code: str) -> str:
         sys.stderr = old_stderr
         return f"Errore di esecuzione: {str(e)}"
 
-# Register of available tools for Ollama
+# Register of available tools
 TOOLS_DEFINITION = [
     {
         "type": "function",
@@ -97,6 +96,27 @@ TOOLS_DEFINITION = [
                 "required": ["code"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_file",
+            "description": "Salva un file di testo nel bucket Supabase 'athena-files'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Nome/percorso del file da salvare"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Contenuto testuale del file"
+                    }
+                },
+                "required": ["file_path", "content"]
+            }
+        }
     }
 ]
 
@@ -105,5 +125,7 @@ def execute_tool(name: str, arguments: dict) -> str:
         return web_search(arguments.get("query", ""))
     elif name == "python_interpreter":
         return python_interpreter(arguments.get("code", ""))
+    elif name == "write_to_file":
+        return write_to_file(arguments.get("file_path", ""), arguments.get("content", ""))
     else:
         return f"Errore: Strumento '{name}' non supportato."

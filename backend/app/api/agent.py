@@ -123,3 +123,11 @@ athena_storage_tool = Tool.from_function(
     description="Usa questo strumento per salvare file su Supabase. Richiede file_path e content.",
     args_schema=FileInput 
 )
+agent = initialize_agent(
+    tools=[athena_storage_tool],
+    llm=llm,
+    agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True,
+    handle_parsing_errors=True # Fondamentale per evitare che l'agente vada in blocco
+)
+Sei autorizzato a utilizzare il tool write_to_file per tutte le operazioni
