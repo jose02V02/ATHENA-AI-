@@ -109,3 +109,17 @@ athena_storage_tool = Tool(
 
 # Aggiungi questo tool alla tua lista di strumenti
 tools = [athena_storage_tool]
+from langchain.tools import Tool
+from pydantic import BaseModel, Field
+
+class FileInput(BaseModel):
+    file_path: str = Field(description="Il nome o percorso del file da creare")
+    content: str = Field(description="Il testo da scrivere nel file")
+
+# Aggiorna il tool
+athena_storage_tool = Tool.from_function(
+    func=write_to_file,
+    name="write_to_file",
+    description="Usa questo strumento per salvare file su Supabase. Richiede file_path e content.",
+    args_schema=FileInput 
+)

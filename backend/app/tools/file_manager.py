@@ -21,3 +21,15 @@ def write_to_file(filename: str, content: str) -> str:
         return f"File '{filename}' salvato correttamente su Supabase!"
     except Exception as e:
         return f"Errore durante il salvataggio su Supabase: {str(e)}"
+        # Modifica il file backend/app/tools/file_manager.py
+def write_to_file(file_path: str, content: str) -> str:
+    try:
+        # Usa file_path invece di filename
+        supabase.storage.from_("athena-files").upload(
+            path=file_path, 
+            file=content.encode("utf-8"),
+            file_options={"content-type": "text/plain"}
+        )
+        return f"File '{file_path}' salvato correttamente su Supabase."
+    except Exception as e:
+        return f"Errore: {str(e)}"
