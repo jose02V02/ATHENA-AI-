@@ -274,7 +274,6 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate size and type
     if (!file.type.startsWith('image/')) {
       alert("Seleziona un file immagine valido.");
       return;
@@ -303,7 +302,6 @@ export default function Home() {
     window.speechSynthesis.cancel();
     setSpeakingMessageId(msgId);
 
-    // Clean markdown characters from text for a clean dictation
     const cleanText = text
       .replace(/```[\s\S]*?```/g, '[Codice omesso]')
       .replace(/`([^`]+)`/g, '$1')
@@ -313,7 +311,6 @@ export default function Home() {
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = 'it-IT';
     
-    // Attempt to load standard Italian voice
     const voices = window.speechSynthesis.getVoices();
     const itVoice = voices.find(v => v.lang.startsWith('it'));
     if (itVoice) {
@@ -372,6 +369,12 @@ export default function Home() {
     recognition.start();
   };
 
+  // Suggested action cards on welcome screen
+  const handleSuggestedAction = (personalityKey: string, message: string) => {
+    setSelectedPersonality(personalityKey);
+    handleSendMessage(message);
+  };
+
   // Send Message
   const handleSendMessage = async (textToSend?: string) => {
     const messageText = textToSend || input;
@@ -389,7 +392,6 @@ export default function Home() {
       convId = newId;
     }
 
-    // Add user message locally
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -402,7 +404,6 @@ export default function Home() {
     setToolExecutions([]);
 
     try {
-      // Prepare image base64 without prefix data:image/...;base64,
       let imagesPayload: string[] | null = null;
       if (imgToSend) {
         imagesPayload = [imgToSend.split(',')[1]];
@@ -426,6 +427,7 @@ export default function Home() {
       let done = false;
       let accumulatedText = "";
       let buffer = "";
+      let latestToolExecutions: ToolExecution[] = [];
 
       while (!done) {
         const { value, done: doneReading } = await reader.read();
@@ -443,22 +445,21 @@ export default function Home() {
               const parsed = JSON.parse(jsonStr);
               
               if (parsed.tool) {
-                // Agent started running a tool
-                setToolExecutions(prev => [
-                  ...prev,
-                  { name: parsed.tool, args: parsed.args, collapsed: false }
-                ]);
+                setToolExecutions(prev => {
+                  const updated = [...prev, { name: parsed.tool, args: parsed.args, collapsed: false }];
+                  latestToolExecutions = updated;
+                  return updated;
+                });
               } else if (parsed.tool_result) {
-                // Tool output returned
                 setToolExecutions(prev => {
                   const updated = [...prev];
                   if (updated.length > 0) {
                     updated[updated.length - 1].result = parsed.tool_result;
                   }
+                  latestToolExecutions = updated;
                   return updated;
                 });
               } else if (parsed.content) {
-                // Regular response stream text
                 accumulatedText += parsed.content;
                 setStreamedContent(accumulatedText);
               } else if (parsed.error) {
@@ -473,10 +474,21 @@ export default function Home() {
         }
       }
 
+      // Cerca eventuali URL di file generati dagli strumenti eseguiti in questa risposta
+      let fileLinksMarkdown = "";
+      latestToolExecutions.forEach(tool => {
+        if (tool.name === 'write_to_file' && tool.result) {
+          const match = tool.result.match(/URL:\s*(https?:\/\/\S+)/);
+          if (match) {
+            fileLinksMarkdown += `\n\n[📎 Scarica il file](${match[1]})`;
+          }
+        }
+      });
+
       // Finalize assistant message
       setMessages(prev => [
         ...prev, 
-        { id: (Date.now() + 1).toString(), role: 'assistant', content: accumulatedText }
+        { id: (Date.now() + 1).toString(), role: 'assistant', content: accumulatedText + fileLinksMarkdown }
       ]);
       setStreamedContent("");
       setToolExecutions([]);
@@ -537,7 +549,6 @@ export default function Home() {
         </button>
 
         <div className="sidebar-content">
-          {/* Chat conversations */}
           <div className="conversations-group">
             <h3 className="section-title">Conversazioni</h3>
             {conversations.length === 0 ? (
@@ -564,7 +575,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* RAG Knowledge base documents list */}
           <div className="knowledge-group">
             <div className="section-title-container">
               <h3 className="section-title">Knowledge Base</h3>
@@ -621,7 +631,6 @@ export default function Home() {
 
       {/* Main Chat Panel */}
       <main className="chat-area">
-        {/* Top Navbar */}
         <div className="top-bar">
           <div className="top-bar-left">
             <h2 className="chat-title">
@@ -637,7 +646,6 @@ export default function Home() {
           </div>
 
           <div className="top-bar-right">
-            {/* Model Selector */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Settings size={14} style={{ color: 'var(--text-muted)' }} />
               <select 
@@ -651,7 +659,6 @@ export default function Home() {
               </select>
             </div>
 
-            {/* Personality Selector */}
             {!activeConversationId && (
               <select 
                 className="settings-select"
@@ -666,9 +673,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Message Container */}
         {messages.length === 0 && !streamedContent && toolExecutions.length === 0 ? (
-          /* Welcome Screen */
           <div className="welcome-container">
             <div className="welcome-logo">
               <Bot size={36} />
@@ -728,7 +733,6 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          /* Chat logs */
           <div className="messages-container">
             {messages.map((msg) => (
               <div key={msg.id} className={`message-row ${msg.role}`}>
@@ -754,7 +758,6 @@ export default function Home() {
                     </div>
                   </div>
                   
-                  {/* TTS Button */}
                   {msg.role === 'assistant' && (
                     <button 
                       className="audio-control-btn"
@@ -775,64 +778,34 @@ export default function Home() {
               </div>
             ))}
 
-            {/* Render active tool executions */}
-           {toolExecutions.map((tool, idx) => (
-  <div key={`tool-${idx}`} className="tool-exec-container">
-    <div className="tool-header" onClick={() => toggleToolCollapse(idx)}>
-      <span className="tool-name-badge">
-        <Terminal size={13} />
-        Esecuzione Strumento: <code>{tool.name}()</code>
-      </span>
-      {tool.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-    </div>
-    {!tool.collapsed && (
-      <div style={{ marginTop: '6px' }}>
-        <div style={{ fontSize: '0.75rem', color: 'var(--text-dark)', marginBottom: '4px' }}>
-          Argomenti: <code>{JSON.stringify(tool.args)}</code>
-        </div>
-        {tool.result ? (
-          <div className="tool-output">
-            {tool.result}
-            {tool.name === 'write_to_file' && (() => {
-              const match = tool.result.match(/URL:\s*(https?:\/\/\S+)/);
-              return match ? (
-                <div style={{ marginTop: '8px' }}>
-                  <a 
-                    href={match[1]} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    download
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '6px 12px',
-                      background: '#a78bfa',
-                      color: '#1a1a2e',
-                      borderRadius: '6px',
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      textDecoration: 'none'
-                    }}
-                  >
-                    <FileCheck size={14} />
-                    Scarica file
-                  </a>
+            {toolExecutions.map((tool, idx) => (
+              <div key={`tool-${idx}`} className="tool-exec-container">
+                <div className="tool-header" onClick={() => toggleToolCollapse(idx)}>
+                  <span className="tool-name-badge">
+                    <Terminal size={13} />
+                    Esecuzione Strumento: <code>{tool.name}()</code>
+                  </span>
+                  {tool.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
                 </div>
-              ) : null;
-            })()}
-          </div>
-        ) : (
-          <div style={{ color: 'var(--text-dark)', fontSize: '0.75rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Play size={10} className="pulse-animation" /> Esecuzione in corso...
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-))}
+                {!tool.collapsed && (
+                  <div style={{ marginTop: '6px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dark)', marginBottom: '4px' }}>
+                      Argomenti: <code>{JSON.stringify(tool.args)}</code>
+                    </div>
+                    {tool.result ? (
+                      <div className="tool-output">
+                        {tool.result}
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--text-dark)', fontSize: '0.75rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Play size={10} className="pulse-animation" /> Esecuzione in corso...
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
 
-            {/* Streamed content */}
             {streamedContent && (
               <div className="message-row assistant">
                 <div className="message-avatar">A</div>
@@ -853,9 +826,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* Input area */}
         <div className="input-area">
-          {/* Base64 preview list */}
           {attachedImage && (
             <div className="input-image-preview-container">
               <div className="input-image-card">
@@ -868,7 +839,6 @@ export default function Home() {
           )}
 
           <div className={`input-container ${attachedImage ? 'with-preview' : ''}`}>
-            {/* Hidden Input for Images */}
             <input 
               type="file"
               ref={imageInputRef}
@@ -877,7 +847,6 @@ export default function Home() {
               onChange={handleAttachImage}
             />
             
-            {/* Attach Image Button */}
             <button 
               className="input-action-btn"
               title="Carica Immagine (Multimodale)"
@@ -887,7 +856,6 @@ export default function Home() {
               <ImageIcon size={18} />
             </button>
 
-            {/* Speech Microphone Button */}
             <button 
               className={`input-action-btn ${isListening ? 'active-mic' : ''}`}
               title={isListening ? "Rilascia per interrompere" : "Detta Messaggio"}
@@ -897,7 +865,6 @@ export default function Home() {
               {isListening ? <MicOff size={18} /> : <Mic size={18} />}
             </button>
 
-            {/* Main Text Input */}
             <textarea
               ref={textareaRef}
               className="chat-input"
@@ -909,7 +876,6 @@ export default function Home() {
               disabled={isStreaming}
             />
 
-            {/* Send Button */}
             <button 
               className="send-btn" 
               onClick={() => handleSendMessage()}
