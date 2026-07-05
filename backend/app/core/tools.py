@@ -3,7 +3,7 @@ import io
 import math
 import json
 from duckduckgo_search import DDGS
-from app.core.file_manager import write_to_file
+from app.tools.file_manager import write_to_file
 
 def web_search(query: str) -> str:
     """Ricerca sul web tramite DuckDuckGo e restituisce i risultati più pertinenti."""
