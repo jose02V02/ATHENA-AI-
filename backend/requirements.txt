@@ -12,3 +12,4 @@ pypdf2==3.0.1
 python-dotenv
 qdrant-client
 pypdf
+supabase
