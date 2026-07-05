@@ -7,7 +7,7 @@ from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
 from app.core.config import settings
 import pypdf
-
+from app.services.hybrid_rag import hybrid_rag
 router = APIRouter()
 
 # Initialize Qdrant client
@@ -132,6 +132,7 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     # Batch insert to Qdrant
+      # Batch insert to Qdrant
     try:
         qdrant_client.upsert(
             collection_name=COLLECTION_NAME,
@@ -140,7 +141,21 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore di inserimento su Qdrant: {str(e)}")
 
+    # 🔽 NUOVA MODIFICA 3: Sincronizza anche con BM25 per ricerca ibrida
+    try:
+        for i, chunk in enumerate(chunks):
+            hybrid_rag.add_document(
+                doc_id=f"{file_name}_{i}",
+                text=chunk,
+                metadata={"document_name": file_name, "chunk_index": i}
+            )
+        print(f"✅ BM25 sincronizzato: {file_name} ({len(chunks)} chunks)")
+    except Exception as e:
+        print(f"⚠️ BM25 sync warning (non critico): {e}")
+    # 🔼 FINE MODIFICA 3
+
     return {
+
         "status": "success",
         "document_name": file_name,
         "chunks_indexed": len(chunks)
@@ -180,7 +195,7 @@ async def delete_document(document_name: str):
     if not qdrant_client:
         raise HTTPException(status_code=530, detail="Qdrant non raggiungibile.")
 
-    try:
+      try:
         qdrant_client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=qmodels.Filter(
@@ -192,6 +207,18 @@ async def delete_document(document_name: str):
                 ]
             )
         )
+        
+        # 🔽 NUOVA MODIFICA 3: Rimuovi anche da BM25
+        # Rimuovi tutti i chunk di questo documento
+        chunks_to_remove = [
+            doc for doc in hybrid_rag.bm25_corpus 
+            if doc.get("metadata", {}).get("document_name") == document_name
+        ]
+        for doc in chunks_to_remove:
+            hybrid_rag.remove_document(doc["id"])
+        print(f"✅ BM25: rimossi {len(chunks_to_remove)} chunks per {document_name}")
+        # 🔼 FINE MODIFICA 3
+        
         return {"status": "success", "message": f"Documento '{document_name}' eliminato da Qdrant."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore eliminazione da Qdrant: {str(e)}")

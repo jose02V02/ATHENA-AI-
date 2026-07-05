@@ -2,7 +2,10 @@ import json
 import uuid
 import httpx
 import asyncio
-import os
+import os 
+import asyncio
+import time
+groq_client = Groq(api_key=settings.GROQ_API_KEY)
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -134,27 +137,102 @@ async def stream_chat(
         images=images_json
     )
     db.add(user_msg)
-    
-    # Auto-rename conversation
-    if conversation.title == "Nuova Conversazione" or conversation.title.startswith("Athena ("):
-        display_title = user_msg_content[:30] + ("..." if len(user_msg_content) > 30 else "")
-        if not display_title and chat_input.images:
-            display_title = "Immagine inviata"
-        conversation.title = display_title
-        db.add(conversation)
-
-    db.commit()
-
-    # 2. Forziamo il modello cloud gratuito di Groq anziché Ollama locale
+        # 2. Modello
     model_to_use = "llama-3.1-8b-instant"
-
-    # 3. Retrieve historical messages for context
+    
+    # 3. Retrieve historical messages
     history = db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at.asc()).all()
     
-    # 4. Construct system prompt and run RAG if Qdrant is connected
+    # 4. NUOVO: Recupera memorie rilevanti sull'utente
+    from app.services.memory_service import memory_service
+    memory_context = ""
+    if user_msg_content:
+        try:
+            memory_context = await memory_service.get_relevant_memories(
+                query=user_msg_content, 
+                limit=3,
+                score_threshold=0.5
+            )
+        except Exception as e:
+            print(f"Memory recall error: {e}")
+    
+    # 5. NUOVO: Hybrid RAG (semantic + BM25)
     rag_context = ""
+    sources_info = []
     from app.api.knowledge import qdrant_client, COLLECTION_NAME, get_embedding
     if qdrant_client and user_msg_content:
+        try:
+            collections = qdrant_client.get_collections().collections
+            if any(c.name == COLLECTION_NAME for c in collections):
+                # USA HYBRID RAG per risultati migliori
+                from app.services.hybrid_rag import hybrid_rag
+                
+                search_results = await hybrid_rag.hybrid_search(
+                    query=user_msg_content,
+                    qdrant_client=qdrant_client,
+                    collection_name=COLLECTION_NAME,
+                    limit=5,
+                    semantic_weight=0.7
+                )
+                
+                context_parts = []
+                for res in search_results:
+                    if res["score"] > 0.01:  # threshold basso perché RRF normalizza
+                        text = res["text"]
+                        # Cerca metadata nel payload Qdrant originale
+                        try:
+                            doc_meta = qdrant_client.retrieve(
+                                collection_name=COLLECTION_NAME,
+                                ids=[res["id"]],
+                                with_payload=True
+                            )
+                            doc_name = doc_meta[0].payload.get("document_name", "Documento") if doc_meta else "Documento"
+                        except:
+                            doc_name = "Documento"
+                        
+                        context_parts.append(
+                            f"--- FONTE: {doc_name} (Score: {res['score']:.3f}) ---\n{text}\n"
+                        )
+                        sources_info.append({"doc": doc_name, "score": res["score"]})
+                
+                if context_parts:
+                    rag_context = "\n".join(context_parts)
+        except Exception as e:
+            print(f"Errore Hybrid RAG: {e}")
+    
+    # 6. Costruisci system prompt con memoria integrata
+    system_prompt = get_system_prompt(conversation.personality)
+    
+    # NUOVO: Inietta memoria nel system prompt
+    if memory_context:
+        system_prompt = f"{system_prompt}\n\n{memory_context}"
+    
+    formatted_messages = [{"role": "system", "content": system_prompt}]
+    
+    # Format history
+    for msg in history[:-1]:
+        m_dict = {"role": msg.role, "content": msg.content}
+        formatted_messages.append(m_dict)
+    
+    # Append current message with RAG context
+    current_content = user_msg_content
+    if rag_context:
+        current_content = (
+            f"Usa le seguenti fonti estratte dai documenti per rispondere alla domanda dell'utente.\n"
+            f"Cita sempre il nome del file della fonte ([NomeFile.pdf]) se utilizzi le sue informazioni.\n"
+            f"Se le informazioni nel contesto non sono sufficienti per rispondere, rispondi al meglio delle tue conoscenze ma menziona che i documenti non contengono la risposta.\n\n"
+            f"CONTESTO DOCUMENTALE:\n{rag_context}\n\n"
+            f"DOMANDA DELL'UTENTE: {user_msg_content}"
+        )
+    
+    current_msg_dict = {"role": "user", "content": current_content}
+    formatted_messages.append(current_msg_dict)
+    
+    # NUOVO: Prepara info per frontend
+    if sources_info:
+        # Salva temporaneamente per invio nell'event_generator
+        pass
+
         try:
             collections = qdrant_client.get_collections().collections
             if any(c.name == COLLECTION_NAME for c in collections):
