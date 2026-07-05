@@ -41,26 +41,66 @@ def init_qdrant_collection():
             print(f"Errore creazione collezione Qdrant: {e}")
 
 async def get_embedding(text: str) -> list:
+    """Genera embedding usando Jina AI (cloud, gratuito)"""
+    jina_api_key = getattr(settings, 'JINA_API_KEY', None)
+    
+    if not jina_api_key:
+        raise HTTPException(
+            status_code=500, 
+            detail="JINA_API_KEY non configurata. Aggiungila nelle env di Vercel."
+        )
+    
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(
-                f"{settings.OLLAMA_URL}/api/embeddings",
+                "https://api.jina.ai/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {jina_api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
                 json={
-                    "model": settings.EMBEDDING_MODEL,
-                    "prompt": text
+                    "model": "jina-embeddings-v2-base-it",
+                    "input": [text]
                 }
             )
+            
             if response.status_code == 200:
-                return response.json().get("embedding")
+                data = response.json()
+                embedding = data["data"][0]["embedding"]
+                return embedding
+            elif response.status_code == 401:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="Chiave Jina AI non valida. Controlla JINA_API_KEY su Vercel."
+                )
+            elif response.status_code == 429:
+                raise HTTPException(
+                    status_code=429, 
+                    detail="Limite richieste Jina AI raggiunto (1000/giorno). Riprova domani."
+                )
             else:
-                # Try pull the model if not found
-                if "not found" in response.text.lower():
-                    print(f"Modello embedding '{settings.EMBEDDING_MODEL}' non trovato. Tendo a scaricarlo...")
-                    await client.post(f"{settings.OLLAMA_URL}/api/pull", json={"name": settings.EMBEDDING_MODEL})
-                raise HTTPException(status_code=500, detail=f"Errore generazione embedding Ollama: {response.text}")
+                error_text = response.text
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Errore Jina API ({response.status_code}): {error_text}"
+                )
+                
+        except httpx.ConnectError:
+            raise HTTPException(
+                status_code=500, 
+                detail="Impossibile connettersi a Jina AI. Verifica connessione internet."
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(
+                status_code=500, 
+                detail="Timeout connessione a Jina AI. Riprova."
+            )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Connessione fallita a Ollama Embeddings: {str(e)}")
-
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Errore generazione embedding: {str(e)}"
+            )
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     pdf_file = io.BytesIO(file_bytes)
     try:

@@ -23,3 +23,5 @@ class Settings:
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 
 settings = Settings()
+🤖 Embeddings (Jina AI - gratis)
+    JINA_API_KEY: str = ""
