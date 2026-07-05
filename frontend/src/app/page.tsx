@@ -776,33 +776,61 @@ export default function Home() {
             ))}
 
             {/* Render active tool executions */}
-            {toolExecutions.map((tool, idx) => (
-              <div key={`tool-${idx}`} className="tool-exec-container">
-                <div className="tool-header" onClick={() => toggleToolCollapse(idx)}>
-                  <span className="tool-name-badge">
-                    <Terminal size={13} />
-                    Esecuzione Strumento: <code>{tool.name}()</code>
-                  </span>
-                  {tool.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+           {toolExecutions.map((tool, idx) => (
+  <div key={`tool-${idx}`} className="tool-exec-container">
+    <div className="tool-header" onClick={() => toggleToolCollapse(idx)}>
+      <span className="tool-name-badge">
+        <Terminal size={13} />
+        Esecuzione Strumento: <code>{tool.name}()</code>
+      </span>
+      {tool.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+    </div>
+    {!tool.collapsed && (
+      <div style={{ marginTop: '6px' }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dark)', marginBottom: '4px' }}>
+          Argomenti: <code>{JSON.stringify(tool.args)}</code>
+        </div>
+        {tool.result ? (
+          <div className="tool-output">
+            {tool.result}
+            {tool.name === 'write_to_file' && (() => {
+              const match = tool.result.match(/URL:\s*(https?:\/\/\S+)/);
+              return match ? (
+                <div style={{ marginTop: '8px' }}>
+                  <a 
+                    href={match[1]} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    download
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      background: '#a78bfa',
+                      color: '#1a1a2e',
+                      borderRadius: '6px',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <FileCheck size={14} />
+                    Scarica file
+                  </a>
                 </div>
-                {!tool.collapsed && (
-                  <div style={{ marginTop: '6px' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dark)', marginBottom: '4px' }}>
-                      Argomenti: <code>{JSON.stringify(tool.args)}</code>
-                    </div>
-                    {tool.result ? (
-                      <div className="tool-output">
-                        {tool.result}
-                      </div>
-                    ) : (
-                      <div style={{ color: 'var(--text-dark)', fontSize: '0.75rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Play size={10} className="pulse-animation" /> Esecuzione in corso...
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+              ) : null;
+            })()}
+          </div>
+        ) : (
+          <div style={{ color: 'var(--text-dark)', fontSize: '0.75rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Play size={10} className="pulse-animation" /> Esecuzione in corso...
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+))}
 
             {/* Streamed content */}
             {streamedContent && (
